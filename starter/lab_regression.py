@@ -7,6 +7,9 @@ Petra Telecom customer churn dataset.
 Run: python lab_regression.py
 """
 
+from logging import config
+from xml.parsers.expat import model
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -26,6 +29,9 @@ from sklearn.metrics import (
     recall_score,   # ✅ أضفناها
     r2_score
 )
+import json
+
+
 def load_data(filepath="data/telecom_churn.csv"):
     """Load the telecom churn dataset.
 
@@ -236,6 +242,118 @@ def build_lasso_pipeline():
     return pipeline
 
 
+
+def run_model_sweep(config_path, X_train, y_train):
+    with open(config_path, "r") as f:
+        config = json.load(f)
+
+    results = []
+
+    cv_splitter = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+    for model_cfg in config["models"]:
+        model_type = model_cfg["type"]
+        params = model_cfg["params"]
+
+        # ===== choose model =====
+        if model_type == "logistic":
+            model = LogisticRegression(
+                random_state=42,
+                max_iter=1000,
+                class_weight="balanced",
+                **params
+            )
+
+        elif model_type == "ridge":
+            model = Ridge(**params)
+
+        elif model_type == "lasso":
+            model = Lasso(**params)
+
+        else:
+            continue
+
+        # ===== pipeline =====
+        pipe = Pipeline([
+            ("scaler", StandardScaler()),
+            ("model", model)
+        ])
+
+        # ===== CV =====
+        if model_type == "logistic":
+            scores = cross_val_score(pipe, X_train, y_train,
+                                     cv=cv_splitter,
+                                     scoring="accuracy")
+        else:
+            scores = cross_val_score(pipe, X_train, y_train,
+                                     cv=5,
+                                     scoring="r2")
+
+        results.append({
+            "model": model_type,
+            "params": params,
+            "mean_score": scores.mean(),
+            "std": scores.std()
+        })
+
+    # ===== print results =====
+    print("\nModel Sweep Results:")
+    for r in results:
+        print(f"{r['model']} | {r['params']} | "
+              f"{r['mean_score']:.3f} +/- {r['std']:.3f}")
+
+    return results
+
+#Tier 3: Do logistic Regression from scratch only using NumPy without sklearn.
+class MyLogisticRegression:
+    def __init__(self, lr=0.01, n_iters=2000, lambda_=0.1):
+        self.lr = lr
+        self.n_iters = n_iters
+        self.lambda_ = lambda_
+        
+    def sigmoid(self, z):
+        z = np.clip(z, -500, 500)
+        return 1 / (1 + np.exp(-z))
+
+    def compute_loss(self, y, y_pred):
+        m = len(y)
+        return - (1/m) * np.sum(
+            y * np.log(y_pred + 1e-9) +
+            (1 - y) * np.log(1 - y_pred + 1e-9)
+        )
+
+    def fit(self, X, y):
+        X = X.values
+        y = y.values
+
+        m, n = X.shape
+        self.weights = np.zeros(n)
+        self.bias = 0
+
+        for i in range(self.n_iters):
+            linear = np.dot(X, self.weights) + self.bias
+            y_pred = self.sigmoid(linear)
+
+            dw = (1/m) * np.dot(X.T, (y_pred - y)) + (self.lambda_/m)*self.weights
+            db = (1/m) * np.sum(y_pred - y)
+
+            self.weights -= self.lr * dw
+            self.bias -= self.lr * db
+
+            if i % 100 == 0:
+                loss = self.compute_loss(y, y_pred)
+                print(f"Iteration {i}, Loss: {loss:.4f}")
+
+    def predict(self, X):
+        X = X.values
+        linear = np.dot(X, self.weights) + self.bias
+        y_pred = self.sigmoid(linear)
+
+        print("Min prob:", y_pred.min())
+        print("Max prob:", y_pred.max())
+
+        return (y_pred >= 0.3).astype(int)
+
 if __name__ == "__main__":
     df = load_data()
     if df is not None:
@@ -253,43 +371,114 @@ if __name__ == "__main__":
             X_train, X_test, y_train, y_test = split
             pipe = build_logistic_pipeline()
             if pipe:
+                # ================== LAB ==================
+                print("\n**************************************")
+                print("************ LAB RESULTS ************")
+                print("**************************************")
+
                 metrics = evaluate_classifier(pipe, X_train, X_test, y_train, y_test)
                 print(f"Logistic Regression: {metrics}")
 
+                pipe.fit(X_train, y_train)
+
+                # ================== TIER 1 ==================
+                print("\n**************************************")
+                print("********* Tier 1: Threshold *********")
+                print("**************************************")
+
+                y_probs = pipe.predict_proba(X_test)[:, 1]
+
+                thresholds = [0.3, 0.4, 0.5, 0.6, 0.7]
+
+                precisions = []
+                recalls = []
+                f1s = []
+
+                for t in thresholds:
+                    y_pred = (y_probs >= t).astype(int)
+
+                    p = precision_score(y_test, y_pred)
+                    r = recall_score(y_test, y_pred)
+                    f = f1_score(y_test, y_pred)
+
+                    precisions.append(p)
+                    recalls.append(r)
+                    f1s.append(f)
+
+                    print(f"\nThreshold: {t}")
+                    print(f"Precision: {p:.3f}")
+                    print(f"Recall: {r:.3f}")
+                    print(f"F1: {f:.3f}")
+
+                best_idx = np.argmax(f1s)
+                print(f"\nBest Threshold: {thresholds[best_idx]} with F1: {f1s[best_idx]:.3f}")
+
+                plt.plot(thresholds, precisions, label="Precision")
+                plt.plot(thresholds, recalls, label="Recall")
+                plt.plot(thresholds, f1s, label="F1")
+                plt.xlabel("Threshold")
+                plt.ylabel("Score")
+                plt.title("Threshold Tuning")
+                plt.legend()
+                plt.savefig("threshold_plot.png")
+
+                # ================== CROSS VALIDATION ==================
                 scores = run_cross_validation(pipe, X_train, y_train)
                 if scores is not None:
                     print(f"CV: {scores.mean():.3f} +/- {scores.std():.3f}")
 
-        # Regression: predict monthly_charges
-        df_reg = df[["tenure", "total_charges", "num_support_calls",
-                     "senior_citizen", "has_partner", "has_dependents",
-                     "monthly_charges"]].dropna()
-        split_reg = split_data(df_reg, "monthly_charges")
-        if split_reg:
-            X_tr, X_te, y_tr, y_te = split_reg
-            ridge_pipe = build_ridge_pipeline()
-            lasso_pipe = build_lasso_pipeline()
+                # ================== TIER 2 ==================
+                print("\n**************************************")
+                print("********* Tier 2: Model Sweep ********")
+                print("**************************************")
 
-            if ridge_pipe and lasso_pipe:
-                # Train both
-                ridge_pipe.fit(X_tr, y_tr)
-                lasso_pipe.fit(X_tr, y_tr)
+                print("\nRUNNING SWEEP...")
+                run_model_sweep("starter/model_config.json", X_train, y_train)
+                
+                
+                # ================== TIER 3 ==================
+                print("\n**************************************")
+                print("***** Tier 3: From Scratch Model *****")
+                print("**************************************")
 
-                # Evaluate Ridge (حسب المطلوب)
-                reg_metrics = evaluate_regressor(ridge_pipe, X_tr, X_te, y_tr, y_te)
-                print(f"Ridge Regression: {reg_metrics}")
+                # 1. Scaling
+                scaler = StandardScaler()
+                X_train_scaled = scaler.fit_transform(X_train)
+                X_test_scaled = scaler.transform(X_test)
 
-                # Get coefficients
-                ridge_coefs = ridge_pipe.named_steps["model"].coef_
-                lasso_coefs = lasso_pipe.named_steps["model"].coef_
+                # 2. Model
+                custom_model = MyLogisticRegression(lr=0.01, n_iters=2000)
 
-                features = X_tr.columns
+                # 3. Train
+                custom_model.fit(pd.DataFrame(X_train_scaled), y_train)
+
+                # 4. Predict
+                y_pred_custom = custom_model.predict(pd.DataFrame(X_test_scaled))
+
+                # 5. Metrics
+                print("\nCustom Logistic Results:")
+                print("Accuracy:", accuracy_score(y_test, y_pred_custom))
+                print("Precision:", precision_score(y_test, y_pred_custom))
+                print("Recall:", recall_score(y_test, y_pred_custom))
+                print("F1:", f1_score(y_test, y_pred_custom))
+
+                # ================== Comparison ==================
+                print("\n**************************************")
+                print("***** Comparison with sklearn *****")
+                print("**************************************")
+
+                # sklearn coefficients
+                sklearn_weights = pipe.named_steps["model"].coef_[0]
 
                 print("\nFeature Coefficients Comparison:")
-                for f, r, l in zip(features, ridge_coefs, lasso_coefs):
-                    print(f"{f:20} | Ridge: {r:.4f} | Lasso: {l:.4f}")
+                for f, w1, w2 in zip(X_train.columns, sklearn_weights, custom_model.weights):
+                    print(f"{f:20} | sklearn: {w1:.4f} | custom: {w2:.4f}")
 
+                sk_preds = pipe.predict(X_test)
 
+                diff = np.sum(sk_preds != y_pred_custom)
+
+                print(f"\nPrediction differences: {diff} out of {len(y_test)} samples")
 """
 Summary of Findings:
 
@@ -307,3 +496,9 @@ To improve performance, several steps can be taken:
 - Address class imbalance using techniques like SMOTE or resampling.
 - Evaluate using metrics like F1-score or ROC-AUC instead of relying only on accuracy.
 """
+
+# NOTE:
+# Results from custom implementation may differ from sklearn because:
+# - sklearn uses optimized solvers (like lbfgs)
+# - different convergence criteria
+# - default regularization handling
