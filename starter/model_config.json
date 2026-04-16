@@ -1,0 +1,46 @@
+{
+  "models": [
+    {
+      "type": "logistic",
+      "params": {
+        "C": 0.1,
+        "penalty": "l2",
+        "solver": "lbfgs"
+      }
+    },
+    {
+      "type": "logistic",
+      "params": {
+        "C": 1.0,
+        "penalty": "l2",
+        "solver": "lbfgs"
+      }
+    },
+    {
+      "type": "logistic",
+      "params": {
+        "C": 10.0,
+        "penalty": "l2",
+        "solver": "lbfgs"
+      }
+    },
+    {
+      "type": "ridge",
+      "params": {
+        "alpha": 0.1
+      }
+    },
+    {
+      "type": "ridge",
+      "params": {
+        "alpha": 1.0
+      }
+    },
+    {
+      "type": "lasso",
+      "params": {
+        "alpha": 0.1
+      }
+    }
+  ]
+}
